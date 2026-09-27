@@ -9,8 +9,9 @@ boton reset) para que los cambios de USB surtan efecto.
 import usb_cdc
 import usb_hid
 
-# Solo teclado: la placa se presenta ante Windows como un teclado USB HID.
-usb_hid.enable((usb_hid.Device.KEYBOARD,))
+# Teclado + raton: la placa se presenta ante Windows como un teclado y un raton USB HID.
+# El raton solo se usa para CLICS; no se envia movimiento del cursor.
+usb_hid.enable((usb_hid.Device.KEYBOARD, usb_hid.Device.MOUSE))
 
 # console = REPL/errores ; data = canal por el que llegan los comandos D/U/X/P.
 usb_cdc.enable(console=True, data=True)

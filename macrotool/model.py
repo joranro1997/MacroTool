@@ -445,6 +445,7 @@ class Settings:
     minimize_to_tray: bool = True  # cerrar la ventana la oculta en la bandeja
     always_on_top: bool = False
     failsafe_corner: bool = False  # esquina de la pantalla principal = parada de emergencia
+    always_admin: bool = False  # relanzar siempre como administrador al abrir (elevación automática)
 
     record_mouse_moves: bool = False
     record_click_positions: bool = False

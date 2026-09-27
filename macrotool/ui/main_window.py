@@ -354,6 +354,9 @@ class SettingsDialog(QDialog):
             ("always_on_top", "Mantener la ventana siempre visible", ""),
             ("failsafe_corner", "Parada de emergencia en las esquinas",
              "Llevar el ratón a una esquina de la pantalla principal detiene la macro."),
+            ("always_admin", "Abrir siempre como administrador",
+             "Al abrir MacroTool se pedirá elevación (UAC). Necesario para que los disparadores "
+             "funcionen dentro de apps que se ejecutan como administrador."),
         )
         for i, (name, text, sub) in enumerate(rows):
             if i:
@@ -578,6 +581,16 @@ class MainWindow(QMainWindow):
         self._release_retry.setInterval(500)
         self._release_retry.timeout.connect(self._retry_pending_release)
 
+        # Aviso de elevación: si MacroTool no va como administrador, vigila si aparece una app
+        # de mayor integridad en primer plano (los disparadores no funcionarían ahí).
+        self._elev_warned = False
+        self._elev_timer: Optional[QTimer] = None
+        if start_hooks and not self._suspend_triggers and not self._is_elevated():
+            self._elev_timer = QTimer(self)
+            self._elev_timer.setInterval(4000)
+            self._elev_timer.timeout.connect(self._check_elevation)
+            self._elev_timer.start()
+
         self._input_guard = _InputGuard(lambda: self._is_running, self)
         app = QApplication.instance()
         if app is not None:
@@ -598,6 +611,11 @@ class MainWindow(QMainWindow):
         startup_error = self._storage_error or self._hook_error
         if startup_error:
             QTimer.singleShot(300, lambda: self.flash(startup_error, "error", 15000))
+        # Al abrir sin administrador (y sin la opción de auto-elevar), avisar con opción de
+        # reiniciar elevado o dejarlo siempre así.
+        if (start_hooks and not self._suspend_triggers and not self._is_elevated()
+                and not bool(self.settings.always_admin)):
+            QTimer.singleShot(400, self._prompt_elevation_on_startup)
 
     # ------------------------------------------------------------------ infraestructura
     def _make_backend(self) -> Any:
@@ -975,9 +993,9 @@ class MainWindow(QMainWindow):
         hgrid = QGridLayout()
         hgrid.setHorizontalSpacing(10)
         hgrid.setVerticalSpacing(8)
-        self.jitter_spin = SpinBox(0, MAX_JITTER_MS, step=5)
+        self.jitter_spin = SpinBox(0, MAX_JITTER_MS, step=1)
         self.jitter_spin.setPrefix("± ")
-        self.hold_jitter_spin = SpinBox(0, MAX_JITTER_MS, step=5)
+        self.hold_jitter_spin = SpinBox(0, MAX_JITTER_MS, step=1)
         self.hold_jitter_spin.setPrefix("± ")
         self.stagger_spin = SpinBox(0, MAX_STAGGER_MS, step=1)
         self.stagger_spin.setPrefix("0–")
@@ -2436,6 +2454,8 @@ class MainWindow(QMainWindow):
         self._tray_enable.toggled.connect(self.set_triggers_enabled)
         self._tray_stop = menu.addAction(theme.icon("stop", theme.RED, 16), "Detener macro", self.stop_all)
         menu.addSeparator()
+        if not self._is_elevated():
+            menu.addAction("Reiniciar como administrador", self.restart_as_admin)
         menu.addAction(theme.icon("power", None, 16), "Salir", self.quit_app)
         tray.setContextMenu(menu)
         tray.activated.connect(self._on_tray_activated)
@@ -2462,6 +2482,84 @@ class MainWindow(QMainWindow):
     def quit_app(self) -> None:
         self._quitting = True
         self.close()
+
+    # ------------------------------------------------------------------ elevación
+    def _is_elevated(self) -> bool:
+        """True si MacroTool ya se ejecuta como administrador (cacheado)."""
+        val = getattr(self, "_elevated", None)
+        if val is None:
+            try:
+                from .. import elevation
+                val = elevation.is_elevated()
+            except Exception:  # noqa: BLE001
+                val = False
+            self._elevated = val
+        return val
+
+    def restart_as_admin(self) -> None:
+        """Relanza MacroTool con permisos de administrador y cierra esta instancia."""
+        try:
+            from .. import elevation
+            launched = elevation.relaunch_as_admin()
+        except Exception:  # noqa: BLE001
+            log.exception("No se pudo reiniciar como administrador")
+            launched = False
+        if launched:
+            self._quitting = True
+            self.quit_app()  # libera el mutex de instancia única para la instancia elevada
+        else:
+            self.flash("No se pudo reiniciar como administrador (¿cancelaste el aviso de Windows?)", "error")
+
+    def _check_elevation(self) -> None:
+        """Aviso único, no intrusivo, cuando una app de mayor integridad toma el primer plano."""
+        if self._elev_warned:
+            return
+        try:
+            from .. import elevation
+            needs = elevation.foreground_needs_admin()
+        except Exception:  # noqa: BLE001
+            return
+        if not needs:
+            return
+        self._elev_warned = True
+        if self._elev_timer is not None:
+            self._elev_timer.stop()
+        msg = ("Una app que se ejecuta como administrador está en primer plano. Para que los "
+               "disparadores de MacroTool funcionen ahí, reinícialo como administrador "
+               "(menú de la bandeja del sistema).")
+        tray = getattr(self, "_tray", None)
+        if tray is not None:
+            try:
+                tray.showMessage(APP_NAME, msg, QSystemTrayIcon.Warning, 9000)
+                return
+            except Exception:  # noqa: BLE001
+                pass
+        self.flash(msg, "error", 9000)
+
+    def _prompt_elevation_on_startup(self) -> None:
+        """Aviso al abrir sin administrador: reiniciar elevado ahora y/o hacerlo siempre."""
+        if self._is_elevated() or bool(self.settings.always_admin):
+            return
+        # Este aviso sustituye al de la bandeja: que no salgan los dos.
+        self._elev_warned = True
+        if self._elev_timer is not None:
+            self._elev_timer.stop()
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle(APP_NAME)
+        box.setText("MacroTool no se está ejecutando como administrador.")
+        box.setInformativeText(
+            "Los disparadores y las macros no funcionarán dentro de aplicaciones que se ejecuten "
+            "como administrador. Reinícialo como administrador para que funcionen en todas partes.")
+        always = QCheckBox("Abrir siempre como administrador a partir de ahora")
+        box.setCheckBox(always)
+        restart = box.addButton("Reiniciar como administrador", QMessageBox.AcceptRole)
+        box.addButton("Ahora no", QMessageBox.RejectRole)
+        box.exec()
+        if always.isChecked():
+            self._set_setting("always_admin", True)
+        if box.clickedButton() is restart:
+            self.restart_as_admin()
 
     def showEvent(self, event) -> None:  # noqa: N802
         theme.enable_dark_titlebar(self)

@@ -1,9 +1,9 @@
-"""Backend de entrada por HID real (solo teclado).
+"""Backend de entrada por HID real (teclado + clics de ratón, sin movimiento).
 
 Envía las pulsaciones a una placa (Raspberry Pi Pico con CircuitPython) por puerto
-serie; la placa las reproduce como un **teclado USB de verdad**, así que llegan por la
-ruta de hardware genuina: SIN el flag "inyectado" que SendInput pone siempre. Es la
-diferencia que enseña el inspector (``tools/input_inspector.py``).
+serie; la placa las reproduce como un **teclado y ratón USB de verdad**, así que llegan
+por la ruta de hardware genuina: SIN el flag "inyectado" que SendInput pone siempre. Es
+la diferencia que enseña el inspector (``tools/input_inspector.py``).
 
 Implementa el mismo Protocol que ``winput.WinInputBackend`` (``InputBackend``), así que
 se enchufa sin tocar el motor::
@@ -11,15 +11,18 @@ se enchufa sin tocar el motor::
     from macrotool.hidserial import HidSerialBackend
     player.set_backend(HidSerialBackend())     # autodetecta la placa
 
-Es **solo teclado**: los métodos de ratón (mover, rueda) no hacen nada, y pulsar un
-botón del ratón lanza ``ValueError`` (para que no pase desapercibido). ``cursor_pos`` /
-``screen_size`` se consultan a Windows con normalidad.
+Soporta teclas y **clics** de ratón (izquierdo/derecho/central). NO hay movimiento del
+ratón: ``move_to`` / ``move_rel`` / ``scroll`` no hacen nada (``cursor_pos`` /
+``screen_size`` se consultan a Windows con normalidad). Los botones laterales x1/x2
+necesitarían un descriptor extendido y lanzan ``ValueError``.
 
 Protocolo serie (líneas ASCII terminadas en ``\\n``) hacia la placa:
-    ``D <code>``  -> pulsar  (code = HID usage id, en decimal)
-    ``U <code>``  -> soltar
-    ``X``         -> soltar todo
-    ``P``         -> ping; la placa responde ``PONG``
+    ``D <code>``   -> pulsar tecla  (code = HID usage id, en decimal)
+    ``U <code>``   -> soltar tecla
+    ``MD <mask>``  -> pulsar botón de ratón (mask = 1 izq, 2 der, 4 central)
+    ``MU <mask>``  -> soltar botón de ratón
+    ``X``          -> soltar todo (teclado y ratón)
+    ``P``          -> ping; la placa responde ``PONG``
 """
 from __future__ import annotations
 
@@ -102,22 +105,29 @@ def list_ports() -> list[str]:
     return pref + rest
 
 
-def _usage(token: str) -> int:
-    """HID usage id de un token de teclado. ValueError si no es una tecla soportada."""
+# Botones de ratón soportados -> máscara de adafruit_hid.Mouse (bit 1 izq, 2 der, 4 central).
+_MOUSE_BUTTONS: dict[str, int] = {"mouse_left": 1, "mouse_right": 2, "mouse_middle": 4}
+
+
+def _resolve(token: str) -> tuple[str, int, str]:
+    """(kind, code, token_normalizado). ``kind`` = 'key' | 'mouse'. ValueError si no se soporta."""
     tok = keys.normalize(token)
-    if tok in keys.MOUSE_TOKENS:
-        raise ValueError(f"El backend HID es solo de teclado; no soporta el ratón: {token!r}")
+    if tok in _MOUSE_BUTTONS:
+        return ("mouse", _MOUSE_BUTTONS[tok], tok)
     code = _HID.get(tok)
-    if code is None:
-        raise ValueError(f"Tecla no soportada por el backend HID (solo teclado): {token!r}")
-    return code
+    if code is not None:
+        return ("key", code, tok)
+    if tok in keys.MOUSE_TOKENS:  # mouse_x1 / mouse_x2: no en el descriptor estándar
+        raise ValueError(f"El backend HID hace clic izquierdo/derecho/central; {token!r} "
+                         "necesitaría un descriptor de ratón extendido")
+    raise ValueError(f"Tecla o botón no soportado por el backend HID: {token!r}")
 
 
-def _usage_or_none(token: str) -> Optional[int]:
-    try:
-        return _usage(token)
-    except ValueError:
-        return None
+def _cmd(kind: str, code: int, down: bool) -> str:
+    """Línea del protocolo serie para pulsar/soltar una tecla o un botón de ratón."""
+    if kind == "mouse":
+        return f"{'MD' if down else 'MU'} {code}"
+    return f"{'D' if down else 'U'} {code}"
 
 
 class HidSerialBackend:
@@ -215,18 +225,20 @@ class HidSerialBackend:
 
     # ------------------------------------------------------------- API InputBackend
     def press(self, tokens: Iterable[str]) -> None:
-        codes = [(t, _usage(t)) for t in tokens]  # ValueError antes de enviar nada
+        resolved = [_resolve(t) for t in tokens]  # ValueError antes de enviar nada
         with self._lock:
-            for tok, code in codes:
-                self._write_locked(f"D {code}")
-                self._pressed.setdefault(keys.normalize(tok), None)
+            for kind, code, tok in resolved:
+                self._write_locked(_cmd(kind, code, True))
+                self._pressed.setdefault(tok, None)
 
     def release(self, tokens: Iterable[str]) -> None:
-        pairs = [(keys.normalize(t), _usage_or_none(t)) for t in tokens]
         with self._lock:
-            for tok, code in pairs:
-                if code is not None:
-                    self._write_locked(f"U {code}")
+            for t in tokens:
+                try:
+                    kind, code, tok = _resolve(t)
+                except ValueError:
+                    continue  # nunca romper una suelta (se llama desde finally)
+                self._write_locked(_cmd(kind, code, False))
                 self._pressed.pop(tok, None)
 
     def release_all(self) -> bool:
@@ -246,7 +258,7 @@ class HidSerialBackend:
                         "la distribución); se omite", ch)
             return
         token, shift = entry
-        code = _usage(token)
+        _kind, code, _tok = _resolve(token)  # siempre una tecla
         with self._lock:
             if shift:
                 self._write_locked(f"D {_HID['lshift']}")
@@ -257,13 +269,13 @@ class HidSerialBackend:
 
     # --- Solo teclado: el ratón no aplica -------------------------------------
     def move_to(self, x: int, y: int) -> None:
-        log.debug("HidSerialBackend es solo teclado; move_to(%s, %s) ignorado", x, y)
+        log.debug("HidSerialBackend no envía movimiento de ratón; move_to(%s, %s) ignorado", x, y)
 
     def move_rel(self, dx: int, dy: int) -> None:
-        log.debug("HidSerialBackend es solo teclado; move_rel(%s, %s) ignorado", dx, dy)
+        log.debug("HidSerialBackend no envía movimiento de ratón; move_rel(%s, %s) ignorado", dx, dy)
 
     def scroll(self, notches: int, horizontal: bool = False) -> None:
-        log.debug("HidSerialBackend es solo teclado; scroll(%s) ignorado", notches)
+        log.debug("HidSerialBackend no envía movimiento de ratón; scroll(%s) ignorado", notches)
 
     def cursor_pos(self) -> tuple[int, int]:
         try:

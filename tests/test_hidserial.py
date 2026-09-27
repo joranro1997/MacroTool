@@ -79,11 +79,34 @@ def test_release_all_manda_x():
     assert backend.pressed == []
 
 
-def test_boton_de_raton_lanza_valueerror():
+def test_clics_de_raton():
+    backend, fake = _backend()
+    backend.press(["mouse_left"])
+    assert _lines(fake) == ["MD 1"]
+    fake.writes.clear()
+    backend.release(["mouse_left"])
+    assert _lines(fake) == ["MU 1"]
+    assert backend.pressed == []
+
+
+@pytest.mark.parametrize("token,mask", [("mouse_left", 1), ("mouse_right", 2), ("mouse_middle", 4)])
+def test_mapa_de_botones_de_raton(token, mask):
+    backend, fake = _backend()
+    backend.press([token])
+    assert _lines(fake) == [f"MD {mask}"]
+
+
+def test_combo_tecla_mas_clic():
+    backend, fake = _backend()
+    backend.press(["shift", "mouse_left"])
+    assert _lines(fake) == ["D 225", "MD 1"]  # shift (usage 225) + clic izquierdo (máscara 1)
+
+
+def test_botones_laterales_x1_x2_lanzan_valueerror():
     backend, fake = _backend()
     with pytest.raises(ValueError):
-        backend.press(["mouse_left"])
-    assert fake.writes == []  # nada se envió
+        backend.press(["mouse_x1"])  # x1/x2 necesitan un descriptor extendido
+    assert fake.writes == []
 
 
 def test_tecla_no_soportada_lanza_valueerror():
@@ -108,5 +131,5 @@ def test_type_char_no_ascii_se_omite():
 def test_press_no_envia_nada_si_una_tecla_es_invalida():
     backend, fake = _backend()
     with pytest.raises(ValueError):
-        backend.press(["a", "mouse_left"])  # valida TODAS antes de enviar
+        backend.press(["a", "mouse_x1"])  # valida TODAS antes de enviar
     assert fake.writes == []

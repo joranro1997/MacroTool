@@ -160,6 +160,8 @@ a = Analysis(
         "serial",
         "serial.tools.list_ports",
         "serial.tools.list_ports_windows",
+        # elevation se importa de forma perezosa desde la UI (botón "Reiniciar como administrador").
+        "macrotool.elevation",
     ],
     hookspath=[],
     hooksconfig={},

@@ -1,8 +1,11 @@
-# Firmware HID para Raspberry Pi Pico 2 (solo teclado)
+# Firmware HID para Raspberry Pi Pico 2 (teclado + clics de ratón)
 
-Convierte la Pico en un **teclado USB real** que MacroTool gobierna por puerto serie.
-Lo que teclea la placa llega a Windows por la ruta de hardware genuina, **sin** el flag
-"inyectado" que pone `SendInput` (compruébalo con `tools/input_inspector.py`).
+Convierte la Pico en un **teclado y ratón USB reales** que MacroTool gobierna por puerto
+serie. Lo que envía la placa llega a Windows por la ruta de hardware genuina, **sin** el
+flag "inyectado" que pone `SendInput` (compruébalo con `tools/input_inspector.py`).
+
+El ratón solo hace **clics** (izquierdo, derecho, central); **no** se envía movimiento del
+cursor.
 
 ## Pasos (una sola vez)
 
@@ -33,6 +36,6 @@ Lo que teclea la placa llega a Windows por la ruta de hardware genuina, **sin** 
 
 ## Notas
 
-- Es **solo teclado** a propósito (tu app solo necesita teclado). Sin ratón.
+- Hace **teclado + clics de ratón** (izq./der./central). Sin movimiento del cursor ni botones laterales x1/x2.
 - El puerto serie de datos aparece como un `COM` nuevo en Windows; `hidserial.py` lo
   autodetecta con un *handshake* (`P` → `PONG`), así que no necesitas saber el número.

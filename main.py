@@ -180,6 +180,8 @@ def _parse_args(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument("--no-hooks", action="store_true",
                         help="no instala los hooks globales de teclado/ratón (pruebas)")
     parser.add_argument("--minimized", action="store_true", help="arranca oculto en la bandeja del sistema")
+    parser.add_argument("--relaunch", action="store_true",
+                        help="reinicio interno tras «Reiniciar como administrador» (espera a que se libere el mutex)")
     return parser.parse_known_args(argv)
 
 
@@ -205,6 +207,18 @@ def main(argv: Optional[list[str]] = None) -> int:
     threading.excepthook = _thread_excepthook
     _set_app_user_model_id()
 
+    # Auto-elevación: si el usuario dejó activado «Abrir siempre como administrador», relanzar
+    # elevado antes de construir nada. La instancia elevada (con --relaunch) toma el relevo.
+    if not args.smoke_test and not args.relaunch:
+        try:
+            from macrotool import elevation, storage
+
+            if storage.load_settings().always_admin and not elevation.is_elevated():
+                if elevation.relaunch_as_admin():
+                    return 0
+        except Exception:  # noqa: BLE001 - si algo falla, arrancar normal (sin elevar)
+            log.exception("No se pudo auto-elevar al arrancar")
+
     from PySide6.QtCore import QTimer
     from PySide6.QtWidgets import QApplication, QMessageBox
 
@@ -224,6 +238,15 @@ def main(argv: Optional[list[str]] = None) -> int:
     mutex = None
     if not args.smoke_test:
         mutex = _acquire_single_instance()
+        if mutex is None and args.relaunch:
+            # Reinicio elevado: la instancia anterior (no elevada) aún tiene el mutex; esperar a
+            # que se cierre y lo libere (hasta ~6 s) antes de darse por "ya en ejecución".
+            import time
+            for _ in range(30):
+                time.sleep(0.2)
+                mutex = _acquire_single_instance()
+                if mutex is not None:
+                    break
         if mutex is None:
             QMessageBox.information(None, APP_NAME, "MacroTool ya se está ejecutando (quizá como administrador).\n\n"
                                     "Búscalo en la bandeja del sistema, junto al reloj.")
