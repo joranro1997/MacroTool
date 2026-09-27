@@ -103,4 +103,5 @@ tests/            # suite de pruebas (pytest)
 
 ## Licencia
 
-Pendiente de definir por el autor.
+Publicado bajo **[The Unlicense](LICENSE)** (dominio público): puedes usar, copiar,
+modificar, distribuir y vender este software sin restricciones ni necesidad de atribución.
