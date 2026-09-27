@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Entornos virtuales
+.venv/
+venv/
+env/
+
+# Build / distribución (el .exe se publica en Releases, no dentro del repo)
+build/
+dist/
+*.spec.bak
+
+# Registros y datos locales
+*.log
+MacroTool-smoke-test/
+
+# Sistema operativo / editores
+Thumbs.db
+.DS_Store
+.idea/
+.vscode/

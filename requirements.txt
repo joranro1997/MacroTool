@@ -1,0 +1,3 @@
+PySide6-Essentials>=6.6
+# Solo para el backend de HID real por placa (macrotool/hidserial.py, tools/hid_demo.py):
+pyserial>=3.5
